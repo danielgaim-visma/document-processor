@@ -1,5 +1,5 @@
-import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { ArrowRight, Upload, Bot, Download, CheckCircle, Loader } from 'lucide-react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import { ArrowRight, Upload, Bot, Download, CheckCircle, Loader, X } from 'lucide-react';
 import { useDropzone } from 'react-dropzone';
 import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from '../components/ui/tooltip';
 import { Progress } from '../components/ui/progress';
@@ -20,11 +20,11 @@ const FileUploadWizard = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processedSections, setProcessedSections] = useState(0);
-  const abortControllerRef = useRef(null);
+  const [totalSections, setTotalSections] = useState(0);
 
   const steps = useMemo(() => [
     { name: 'Last opp fil', icon: Upload, description: 'Velg og last opp dokumentet ditt' },
-    { name: 'Behandle splittede filer', icon: Bot, description: 'AI behandler og analyserer dokumentet' },
+    { name: 'Behandle seksjoner', icon: Bot, description: 'AI behandler og analyserer dokumentet' },
     { name: 'Last ned ZIP', icon: Download, description: 'Få dine behandlede filer' },
     { name: 'Fullført', icon: CheckCircle, description: 'Prosessen er fullført' }
   ], []);
@@ -112,9 +112,8 @@ const FileUploadWizard = () => {
   const handleProcessSections = async () => {
     setIsProcessing(true);
     setError(null);
-    setProcessedSections(0);
-    abortControllerRef.current = new AbortController();
-
+    setProcessedSections(1);  // Start at 1 instead of 0
+    setTotalSections(parsedSections.length);
     try {
       const response = await fetch(`${API_BASE_URL}/api/process-sections`, {
         method: 'POST',
@@ -126,55 +125,41 @@ const FileUploadWizard = () => {
           keywords: keywords,
           original_filename: file.name
         }),
-        signal: abortControllerRef.current.signal
       });
 
-      if (response.ok) {
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-          const chunk = decoder.decode(value);
-          const lines = chunk.split('\n');
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
 
-          for (const line of lines) {
-            if (line.trim()) {
-              try {
-                const data = JSON.parse(line);
-                if (data.progress !== undefined) {
-                  setProcessedSections(data.progress);
-                } else if (data.zip_file) {
-                  setZipFilename(data.zip_file);
-                  setCurrentStep(2);
-                } else if (data.error) {
-                  throw new Error(data.error);
-                } else if (data.cancelled) {
-                  console.log('Processing was cancelled by the server');
-                  return;
-                }
-              } catch (parseError) {
-                console.error('Error parsing server response:', parseError);
+        for (const line of lines) {
+          if (line.trim()) {
+            try {
+              const data = JSON.parse(line);
+              if (data.progress) {
+                setProcessedSections(data.progress);
+              } else if (data.zip_file) {
+                setZipFilename(data.zip_file);
+                setCurrentStep(2);
+              } else if (data.error) {
+                throw new Error(data.error);
               }
+            } catch (parseError) {
+              console.error('Error parsing server response:', parseError);
             }
           }
         }
-      } else {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Unknown error occurred');
       }
     } catch (error) {
-      if (error.name === 'AbortError') {
-        console.log('Behandling av splittede filer avbrutt');
-      } else {
-        console.error('Feil ved behandling av splittede filer:', error);
-        setError(`Feil ved behandling av splittede filer: ${error.message}`);
-      }
+      console.error('Feil ved behandling av seksjoner:', error);
+      setError(`Feil ved behandling av seksjoner: ${error.message}`);
     } finally {
       setIsProcessing(false);
-      abortControllerRef.current = null;
     }
   };
 
@@ -188,9 +173,6 @@ const FileUploadWizard = () => {
   };
 
   const handleCancel = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
     setCurrentStep(0);
     setFile(null);
     setParsedSections(null);
@@ -200,7 +182,7 @@ const FileUploadWizard = () => {
     setIsUploading(false);
     setIsProcessing(false);
     setProcessedSections(0);
-    abortControllerRef.current = null;
+    setTotalSections(0);
   };
 
   const renderStepIndicator = () => (
@@ -277,18 +259,18 @@ const FileUploadWizard = () => {
 
   const renderProcessingSections = () => (
     <div className="mt-8 bg-gray-700 p-6 rounded-lg">
-      <p className="mb-4 text-gray-300">Fil analysert vellykket. Her er et sammendrag av de analyserte splittede filene:</p>
+      <p className="mb-4 text-gray-300">Fil analysert vellykket. Her er et sammendrag av de analyserte seksjonene:</p>
       <ul className="list-disc list-inside mb-4 text-gray-300">
         {parsedSections && parsedSections.map((section, index) => (
-          <li key={index}>{section.title || `Splittet fil ${index + 1}`}</li>
+          <li key={index}>{section.title || `Seksjon ${index + 1}`}</li>
         ))}
       </ul>
       <p className="mb-4 text-gray-300">Uttrukne nøkkelord: {keywords.join(', ')}</p>
       {isProcessing && (
         <div className="mb-4">
-          <Progress value={(processedSections / parsedSections.length) * 100} className="mb-2" />
+          <Progress value={(processedSections / totalSections) * 100} className="mb-2" />
           <p className="text-center text-gray-300">
-            Behandler splittet fil {processedSections} av {parsedSections.length}
+            Behandler seksjon {processedSections} av {totalSections}
           </p>
         </div>
       )}
@@ -300,11 +282,11 @@ const FileUploadWizard = () => {
         {isProcessing ? (
           <>
             <Loader className="animate-spin mr-2" size={20} />
-            Behandler splittede filer...
+            Behandler seksjoner...
           </>
         ) : (
           <>
-            Behandle splittede filer <ArrowRight className="ml-2" size={20} />
+            Behandle seksjoner <ArrowRight className="ml-2" size={20} />
           </>
         )}
       </Button>
@@ -313,7 +295,7 @@ const FileUploadWizard = () => {
 
   const renderDownload = () => (
     <div className="mt-8 bg-gray-700 p-6 rounded-lg">
-      <p className="mb-4 text-gray-300">Splittede filer behandlet. Klikk under for å laste ned ZIP-filen.</p>
+      <p className="mb-4 text-gray-300">Seksjoner behandlet. Klikk under for å laste ned ZIP-filen.</p>
       <Button
         onClick={handleDownload}
         className="w-full"
@@ -335,7 +317,7 @@ const FileUploadWizard = () => {
   );
 
   return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
       <div className="max-w-4xl w-full bg-gray-800 rounded-lg shadow-xl p-8">
         <h1 className="text-3xl font-bold text-white mb-8 text-center">Dokumentbehandler</h1>
 
@@ -354,6 +336,7 @@ const FileUploadWizard = () => {
 
         {currentStep > 0 && currentStep < 3 && (
           <Button variant="outline" onClick={handleCancel} className="mt-4">
+            Avbryt <X className="ml-2" size={20} />
           </Button>
         )}
       </div>
