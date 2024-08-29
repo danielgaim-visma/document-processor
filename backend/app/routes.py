@@ -8,12 +8,13 @@ from datetime import datetime
 import zipfile
 import shutil
 import tempfile
+from flask_cors import cross_origin
 
 main = Blueprint('main', __name__)
 logger = logging.getLogger(__name__)
 
-
 @main.route('/api/upload-and-parse', methods=['POST'])
+@cross_origin()
 def upload_and_parse():
     logger.debug("Received request to /api/upload-and-parse")
 
@@ -64,15 +65,14 @@ def upload_and_parse():
     logger.error("File upload failed")
     return jsonify({'error': 'File upload failed'}), 400
 
-
 @main.route('/api/process-sections', methods=['POST'])
+@cross_origin()
 def process_sections():
     data = request.json
     if not data or 'parsed_sections' not in data or 'keywords' not in data or 'original_filename' not in data:
         logger.error("Insufficient data provided")
         return jsonify({'error': 'Insufficient data provided'}), 400
 
-    @stream_with_context
     def generate():
         temp_dir = tempfile.mkdtemp()
         try:
@@ -146,16 +146,17 @@ def process_sections():
                     zipf.write(file, arcname=os.path.basename(file))
 
             yield json.dumps({'zip_file': zip_file_name, 'errors': errors}) + '\n'
+
         except Exception as e:
             logger.error(f"Error in process_sections: {str(e)}", exc_info=True)
             yield json.dumps({'error': str(e)}) + '\n'
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-    return Response(generate(), mimetype='application/json')
-
+    return Response(stream_with_context(generate()), mimetype='application/json')
 
 @main.route('/api/download/<filename>', methods=['GET'])
+@cross_origin()
 def download_file(filename):
     try:
         return send_file(os.path.join(current_app.config['UPLOAD_FOLDER'], filename), as_attachment=True)

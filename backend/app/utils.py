@@ -1,4 +1,3 @@
-import os
 import re
 import docx
 import openpyxl
@@ -8,13 +7,12 @@ from nltk.corpus import stopwords
 import openai
 import logging
 import json
-from typing import List, Dict
+from typing import List, Dict, Optional
 import PyPDF2
-from typing import Optional
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from datetime import datetime
 import zipfile
-
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,7 +21,6 @@ nltk.download('punkt', quiet=True)
 nltk.download('stopwords', quiet=True)
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
-
 
 def read_file_content(file_path: str) -> Optional[str]:
     file_extension = os.path.splitext(file_path)[1].lower()
@@ -96,7 +93,6 @@ def extract_keywords(text):
     except Exception as e:
         logger.error(f"Error extracting keywords: {str(e)}")
         raise
-
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10),
        retry=retry_if_exception_type(openai.error.OpenAIError))
 def call_openai_api(system_instruction: Dict, user_prompt: str) -> str:
@@ -109,7 +105,7 @@ def call_openai_api(system_instruction: Dict, user_prompt: str) -> str:
             ],
             temperature=0.2,
             max_tokens=4096,
-            timeout=30  # Add timeout
+            timeout=60  # Increase timeout to 60 seconds
         )
 
         if not response.choices or not response.choices[0].message['content'].strip():
