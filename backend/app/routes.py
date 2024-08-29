@@ -1,4 +1,5 @@
-from flask import Blueprint, request, jsonify, current_app, send_file
+from flask import Blueprint, request, jsonify, current_app, send_file, Response, stream_with_context
+from werkzeug.utils import secure_filename
 from .utils import read_file_content, parse_content, extract_keywords, extract_and_structure_data
 import os
 import logging
@@ -9,9 +10,11 @@ import zipfile
 main = Blueprint('main', __name__)
 logger = logging.getLogger(__name__)
 
-@main.route('/api')
-def api_home():
-    return jsonify({"message": "Welcome to the Document Processor API"}), 200
+
+@main.route('/')
+def home():
+    return "Welcome to the Document Processor API"
+
 
 @main.route('/api/upload-and-parse', methods=['POST'])
 def upload_and_parse():
@@ -33,7 +36,7 @@ def upload_and_parse():
 
     if file:
         try:
-            filename = file.filename
+            filename = secure_filename(file.filename)
             file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
             logger.debug(f"Attempting to save file to: {file_path}")
             file.save(file_path)
@@ -69,7 +72,6 @@ def upload_and_parse():
     logger.error("File upload failed")
     return jsonify({'error': 'File upload failed'}), 400
 
-
 @main.route('/api/process-sections', methods=['POST'])
 def process_sections():
     data = request.json
@@ -77,84 +79,90 @@ def process_sections():
         logger.error("Insufficient data provided")
         return jsonify({'error': 'Insufficient data provided'}), 400
 
-    try:
-        parsed_sections = data['parsed_sections']
-        keywords = data['keywords']
-        original_filename = data['original_filename']
+    @stream_with_context
+    def generate():
+        try:
+            parsed_sections = data['parsed_sections']
+            keywords = data['keywords']
+            original_filename = data['original_filename']
 
-        logger.debug(f"Type of parsed_sections: {type(parsed_sections)}")
-        logger.debug(f"Length of parsed_sections: {len(parsed_sections)}")
-        logger.debug(f"Type of keywords: {type(keywords)}")
-        logger.debug(f"Keywords: {keywords}")
+            logger.debug(f"Number of sections to process: {len(parsed_sections)}")
+            logger.debug(f"Keywords: {keywords}")
+            logger.debug(f"Original filename: {original_filename}")
 
-        if not parsed_sections:
-            logger.error("No sections to process")
-            return jsonify({'error': 'No sections to process'}), 400
+            output_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'processed_files')
+            os.makedirs(output_dir, exist_ok=True)
 
-        output_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'processed_files')
-        os.makedirs(output_dir, exist_ok=True)
+            json_files = []
+            errors = []
+            total_sections = len(parsed_sections)
 
-        json_files = []
-        errors = []
-        for i, section in enumerate(parsed_sections, 1):
-            try:
-                logger.info(f"Processing section {i}")
-                logger.debug(f"Section content: {section[:100]}...")  # Log first 100 chars of section
-                logger.debug(f"Keywords for section {i}: {keywords}")
-                structured_data = extract_and_structure_data(section, keywords)
-                logger.debug(f"Structured data for section {i}: {structured_data}")
+            for i, section in enumerate(parsed_sections, 1):
+                try:
+                    logger.info(f"Processing section {i} of {total_sections}")
+                    structured_data = extract_and_structure_data(section, keywords)
 
-                # Check if structured_data is a list and convert it to a dictionary if necessary
-                if isinstance(structured_data, list):
-                    logger.warning(f"structured_data for section {i} is a list, converting to dictionary")
-                    structured_data = {
-                        'content': structured_data,
-                        'section_number': i
-                    }
-                elif isinstance(structured_data, dict):
-                    structured_data['section_number'] = i
-                else:
-                    logger.error(f"Unexpected type for structured_data in section {i}: {type(structured_data)}")
-                    raise TypeError(f"Unexpected type for structured_data: {type(structured_data)}")
+                    if isinstance(structured_data, list):
+                        structured_data = {
+                            'content': structured_data,
+                            'section_number': i
+                        }
+                    elif isinstance(structured_data, dict):
+                        structured_data['section_number'] = i
+                    else:
+                        logger.error(f"Unexpected type for structured_data in section {i}: {type(structured_data)}")
+                        raise TypeError(f"Unexpected type for structured_data: {type(structured_data)}")
 
-                file_name = f"section_{i:03d}.json"
-                file_path = os.path.join(output_dir, file_name)
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    json.dump(structured_data, f, ensure_ascii=False, indent=2)
-                json_files.append(file_path)
-                logger.info(f"Successfully processed section {i}")
-            except Exception as section_error:
-                error_message = f"Error processing section {i}: {str(section_error)}"
-                logger.error(error_message, exc_info=True)
-                errors.append(error_message)
+                    file_name = f"section_{i:03d}.json"
+                    file_path = os.path.join(output_dir, file_name)
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        json.dump(structured_data, f, ensure_ascii=False, indent=2)
+                    json_files.append(file_path)
 
-        if not json_files:
-            logger.error("No sections were successfully processed")
-            return jsonify({'error': 'No sections were successfully processed', 'details': errors}), 500
+                    yield json.dumps({'progress': i, 'total': total_sections}) + '\n'
 
-        metadata = {
-            "original_file": original_filename,
-            "total_sections": len(parsed_sections),
-            "processed_sections": len(json_files),
-            "global_keywords": keywords,
-            "processed_date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            "errors": errors
-        }
-        metadata_file = os.path.join(output_dir, "metadata.json")
-        with open(metadata_file, 'w', encoding='utf-8') as f:
-            json.dump(metadata, f, ensure_ascii=False, indent=2)
-        json_files.append(metadata_file)
+                except Exception as section_error:
+                    error_message = f"Error processing section {i}: {str(section_error)}"
+                    logger.error(error_message, exc_info=True)
+                    errors.append(error_message)
+                    yield json.dumps({'error': error_message}) + '\n'
 
-        zip_file_name = f"processed_files_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-        zip_file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], zip_file_name)
-        with zipfile.ZipFile(zip_file_path, 'w') as zipf:
-            for file in json_files:
-                zipf.write(file, arcname=os.path.basename(file))
+                # Check if the client is still connected
+                if not request.environ.get('werkzeug.socket'):
+                    logger.info("Client disconnected, stopping processing")
+                    yield json.dumps({'cancelled': True}) + '\n'
+                    return
 
-        return jsonify({'zip_file': zip_file_name, 'errors': errors}), 200
-    except Exception as e:
-        logger.error(f"Error in process_sections: {str(e)}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+            if not json_files:
+                logger.error("No sections were successfully processed")
+                yield json.dumps({'error': 'No sections were successfully processed', 'details': errors}) + '\n'
+                return
+
+            metadata = {
+                "original_file": original_filename,
+                "total_sections": total_sections,
+                "processed_sections": len(json_files),
+                "global_keywords": keywords,
+                "processed_date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "errors": errors
+            }
+            metadata_file = os.path.join(output_dir, "metadata.json")
+            with open(metadata_file, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, ensure_ascii=False, indent=2)
+            json_files.append(metadata_file)
+
+            zip_file_name = f"processed_files_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+            zip_file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], zip_file_name)
+            with zipfile.ZipFile(zip_file_path, 'w') as zipf:
+                for file in json_files:
+                    zipf.write(file, arcname=os.path.basename(file))
+
+            yield json.dumps({'zip_file': zip_file_name, 'errors': errors}) + '\n'
+        except Exception as e:
+            logger.error(f"Error in process_sections: {str(e)}", exc_info=True)
+            yield json.dumps({'error': str(e)}) + '\n'
+
+    return Response(generate(), mimetype='application/json')
 
 @main.route('/api/download/<filename>', methods=['GET'])
 def download_file(filename):
