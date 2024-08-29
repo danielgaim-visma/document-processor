@@ -127,12 +127,12 @@ def extract_and_structure_data(content: str, keywords: List[str]) -> Dict:
     try:
         logger.info(f"Sending prompt to OpenAI. Content length: {len(content)}")
         response = openai.ChatCompletion.create(
-            model="gpt-4-1106-preview",
+            model="chatgpt-4o-latest",
             messages=[
                 system_instruction,
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=0.4,
+            temperature=0.2,
             max_tokens=4096
         )
 
