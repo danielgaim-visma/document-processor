@@ -10,10 +10,6 @@ import zipfile
 main = Blueprint('main', __name__)
 logger = logging.getLogger(__name__)
 
-@main.route('/api/welcome')
-def api_welcome():
-    return jsonify({"message": "Welcome to the Document Processor API"})
-
 @main.route('/api/upload-and-parse', methods=['POST'])
 def upload_and_parse():
     logger.debug("Received request to /api/upload-and-parse")

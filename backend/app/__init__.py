@@ -1,4 +1,4 @@
-from flask import Flask, send_from_directory
+fcrom flask import Flask, send_from_directory
 from flask_cors import CORS
 from .config import Config
 import os
@@ -27,7 +27,7 @@ def create_app(config_class=Config):
     CORS(app, resources={r"/*": {"origins": "*"}})
 
     from .routes import main as main_blueprint
-    app.register_blueprint(main_blueprint, url_prefix='/api')
+    app.register_blueprint(main_blueprint)
 
     @app.route('/', defaults={'path': ''})
     @app.route('/<path:path>')
