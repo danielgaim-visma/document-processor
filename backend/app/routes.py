@@ -121,11 +121,6 @@ def process_sections():
                     errors.append(error_message)
                     yield json.dumps({'error': error_message}) + '\n'
 
-                if not request.environ.get('werkzeug.socket'):
-                    logger.info("Client disconnected, stopping processing")
-                    yield json.dumps({'cancelled': True}) + '\n'
-                    return
-
             if not json_files:
                 logger.error("No sections were successfully processed")
                 yield json.dumps({'error': 'No sections were successfully processed', 'details': errors}) + '\n'
