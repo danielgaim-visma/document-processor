@@ -11,10 +11,11 @@ import json
 from typing import List, Dict
 import PyPDF2
 from typing import Optional
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from datetime import datetime
+import zipfile
 
 
-
-# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,32 @@ def extract_keywords(text):
         logger.error(f"Error extracting keywords: {str(e)}")
         raise
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10),
+       retry=retry_if_exception_type(openai.error.OpenAIError))
+def call_openai_api(system_instruction: Dict, user_prompt: str) -> str:
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4o",
+            messages=[
+                system_instruction,
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.2,
+            max_tokens=4096,
+            timeout=30  # Add timeout
+        )
+
+        if not response.choices or not response.choices[0].message['content'].strip():
+            raise ValueError("OpenAI API returned an empty response")
+
+        return response.choices[0].message['content'].strip()
+
+    except openai.error.OpenAIError as e:
+        logger.error(f"OpenAI API error: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in OpenAI API call: {str(e)}")
+        raise
 
 def extract_and_structure_data(content: str, keywords: List[str]) -> Dict:
     logger.debug(f"Content type: {type(content)}")
@@ -126,25 +153,7 @@ def extract_and_structure_data(content: str, keywords: List[str]) -> Dict:
 
     try:
         logger.info(f"Sending prompt to OpenAI. Content length: {len(content)}")
-        response = openai.ChatCompletion.create(
-            model="gpt-4o",
-            messages=[
-                system_instruction,
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.2,
-            max_tokens=4096
-        )
-
-        if not response.choices or not response.choices[0].message['content'].strip():
-            logger.error("OpenAI API returned an empty response")
-            return {
-                "title": "Error: Empty Response",
-                "body": "The AI model returned an empty response for this section.",
-                "tags": []
-            }
-
-        result = response.choices[0].message['content'].strip()
+        result = call_openai_api(system_instruction, user_prompt)
         logger.info(f"Received response from OpenAI. Response length: {len(result)}")
 
         # Check if the response starts with ```json and ends with ```
@@ -169,21 +178,22 @@ def extract_and_structure_data(content: str, keywords: List[str]) -> Dict:
 
         except json.JSONDecodeError as json_error:
             logger.error(f"Failed to parse JSON from OpenAI response. Response content: {result}")
+            logger.error(f"JSON parsing error: {str(json_error)}")
             return {
                 "title": "Error: Invalid JSON",
                 "body": f"Failed to parse JSON from OpenAI response: {result}",
                 "tags": []
             }
 
-    except openai.error.OpenAIError as openai_error:
-        logger.error(f"OpenAI API error: {str(openai_error)}")
+    except ValueError as ve:
+        logger.error(f"ValueError in OpenAI API call: {str(ve)}")
         return {
-            "title": "Error: OpenAI API",
-            "body": f"OpenAI API error: {str(openai_error)}",
+            "title": "Error: Empty Response",
+            "body": "The AI model returned an empty response for this section.",
             "tags": []
         }
     except Exception as e:
-        logger.error(f"Unexpected error in OpenAI API call: {str(e)}")
+        logger.error(f"Unexpected error in extract_and_structure_data: {str(e)}", exc_info=True)
         return {
             "title": "Error: Unexpected",
             "body": f"Unexpected error in OpenAI API call: {str(e)}",
@@ -192,6 +202,10 @@ def extract_and_structure_data(content: str, keywords: List[str]) -> Dict:
 
 def process_file(file_path: str) -> str:
     content = read_file_content(file_path)
+    if content is None:
+        logger.error(f"Unable to read file content: {file_path}")
+        return "Error: Unable to read file content"
+
     keywords = extract_keywords(content)
     sections = parse_content(content)
 

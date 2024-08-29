@@ -6,23 +6,22 @@ import logging
 import json
 from datetime import datetime
 import zipfile
+import shutil
+import tempfile
 
 main = Blueprint('main', __name__)
 logger = logging.getLogger(__name__)
 
+
 @main.route('/api/upload-and-parse', methods=['POST'])
 def upload_and_parse():
     logger.debug("Received request to /api/upload-and-parse")
-    logger.debug(f"Request files: {request.files}")
-    logger.debug(f"Request form: {request.form}")
 
     if 'file' not in request.files:
         logger.error("No file part in the request")
         return jsonify({'error': 'No file part'}), 400
 
     file = request.files['file']
-    logger.debug(f"File object: {file}")
-    logger.debug(f"File name: {file.filename}")
 
     if file.filename == '':
         logger.error("No selected file")
@@ -30,41 +29,41 @@ def upload_and_parse():
 
     if file:
         try:
-            filename = secure_filename(file.filename)
-            file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
-            logger.debug(f"Attempting to save file to: {file_path}")
-            file.save(file_path)
-            logger.info(f"File saved: {file_path}")
+            with tempfile.TemporaryDirectory() as temp_dir:
+                filename = secure_filename(file.filename)
+                file_path = os.path.join(temp_dir, filename)
+                logger.debug(f"Attempting to save file to: {file_path}")
+                file.save(file_path)
+                logger.info(f"File saved: {file_path}")
 
-            logger.debug("Reading file content")
-            content = read_file_content(file_path)
+                logger.debug("Reading file content")
+                content = read_file_content(file_path)
 
-            if content is None:
-                logger.error(f"Unable to read file content: {file_path}")
-                return jsonify({'error': 'Unable to read file content'}), 400
+                if content is None:
+                    logger.error(f"Unable to read file content: {file_path}")
+                    return jsonify({'error': 'Unable to read file content'}), 400
 
-            logger.debug("Parsing content")
-            parsed_sections = parse_content(content)
-            logger.debug(f"Number of parsed sections: {len(parsed_sections)}")
-            logger.debug(f"Type of parsed_sections: {type(parsed_sections)}")
+                logger.debug("Parsing content")
+                parsed_sections = parse_content(content)
+                logger.debug(f"Number of parsed sections: {len(parsed_sections)}")
 
-            logger.debug("Extracting keywords")
-            keywords = extract_keywords(content)
-            logger.debug(f"Extracted keywords: {keywords}")
-            logger.debug(f"Type of keywords: {type(keywords)}")
+                logger.debug("Extracting keywords")
+                keywords = extract_keywords(content)
+                logger.debug(f"Extracted keywords: {keywords}")
 
-            logger.debug("Preparing response")
-            return jsonify({
-                'parsed_sections': parsed_sections,
-                'keywords': keywords,
-                'original_filename': filename
-            }), 200
+                logger.debug("Preparing response")
+                return jsonify({
+                    'parsed_sections': parsed_sections,
+                    'keywords': keywords,
+                    'original_filename': filename
+                }), 200
         except Exception as e:
             logger.error(f"Error in upload_and_parse: {str(e)}", exc_info=True)
             return jsonify({'error': str(e)}), 500
 
     logger.error("File upload failed")
     return jsonify({'error': 'File upload failed'}), 400
+
 
 @main.route('/api/process-sections', methods=['POST'])
 def process_sections():
@@ -75,6 +74,7 @@ def process_sections():
 
     @stream_with_context
     def generate():
+        temp_dir = tempfile.mkdtemp()
         try:
             parsed_sections = data['parsed_sections']
             keywords = data['keywords']
@@ -84,7 +84,7 @@ def process_sections():
             logger.debug(f"Keywords: {keywords}")
             logger.debug(f"Original filename: {original_filename}")
 
-            output_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'processed_files')
+            output_dir = os.path.join(temp_dir, 'processed_files')
             os.makedirs(output_dir, exist_ok=True)
 
             json_files = []
@@ -121,7 +121,6 @@ def process_sections():
                     errors.append(error_message)
                     yield json.dumps({'error': error_message}) + '\n'
 
-                # Check if the client is still connected
                 if not request.environ.get('werkzeug.socket'):
                     logger.info("Client disconnected, stopping processing")
                     yield json.dumps({'cancelled': True}) + '\n'
@@ -155,8 +154,11 @@ def process_sections():
         except Exception as e:
             logger.error(f"Error in process_sections: {str(e)}", exc_info=True)
             yield json.dumps({'error': str(e)}) + '\n'
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     return Response(generate(), mimetype='application/json')
+
 
 @main.route('/api/download/<filename>', methods=['GET'])
 def download_file(filename):
