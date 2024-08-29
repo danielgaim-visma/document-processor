@@ -9,7 +9,7 @@ def create_app(config_class=Config):
     if os.environ.get('DYNO'):
         static_folder = '/app/frontend/build'
     else:
-        static_folder = '../frontend/build'  # Changed from '../../frontend/build'
+        static_folder = '../frontend/build'
 
     app = Flask(__name__, static_folder=static_folder, static_url_path='')
     app.config.from_object(config_class)
@@ -27,15 +27,19 @@ def create_app(config_class=Config):
     CORS(app, resources={r"/*": {"origins": "*"}})
 
     from .routes import main as main_blueprint
-    app.register_blueprint(main_blueprint)
+    app.register_blueprint(main_blueprint, url_prefix='/api')
 
     @app.route('/', defaults={'path': ''})
     @app.route('/<path:path>')
     def serve(path):
+        logger.info(f"Serving path: {path}")
         if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
+            logger.info(f"Serving file: {path}")
             return send_from_directory(app.static_folder, path)
         else:
+            logger.info("Serving index.html")
             return send_from_directory(app.static_folder, 'index.html')
 
+    logger.info(f"Application URL map: {app.url_map}")
     logger.info("Application created and configured")
     return app
