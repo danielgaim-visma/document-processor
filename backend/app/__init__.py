@@ -5,7 +5,13 @@ import os
 import logging
 
 def create_app(config_class=Config):
-    app = Flask(__name__, static_folder='../frontend/build', static_url_path='')
+    # Check if we're running on Heroku
+    if os.environ.get('DYNO'):
+        static_folder = '/app/frontend/build'
+    else:
+        static_folder = '../frontend/build'  # Changed from '../../frontend/build'
+
+    app = Flask(__name__, static_folder=static_folder, static_url_path='')
     app.config.from_object(config_class)
 
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -32,5 +38,4 @@ def create_app(config_class=Config):
             return send_from_directory(app.static_folder, 'index.html')
 
     logger.info("Application created and configured")
-
     return app
